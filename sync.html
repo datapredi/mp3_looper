@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>逐字稿同步播放器</title>
+<style>
+  :root{
+    --bg:#f5f3ef; --card:#ffffff; --text:#1f1b16; --muted:#7a7368;
+    --accent:#c1440e; --word-active:#ffe27a; --sentence-active:#fff6dc; --border:#e2ddd3;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#181512; --card:#242019; --text:#f2ede4; --muted:#a89e8f;
+      --accent:#e07b45; --word-active:#8a6d1f; --sentence-active:#332b18; --border:#3a342b;
+    }
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,"Segoe UI",Helvetica,Arial,"PingFang TC","Microsoft JhengHei",sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh;
+  }
+  .wrap{max-width:720px; margin:0 auto; padding:20px 16px 100px;}
+  h1{font-size:1.25rem; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:0.85rem; margin-bottom:16px;}
+  .note{font-size:0.75rem; color:var(--muted); margin:-6px 0 16px; line-height:1.5;}
+  .pickers{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px;}
+  input[type=file]{display:none;}
+  button, label.filebtn{
+    font-family:inherit; font-size:0.9rem; padding:10px 14px; border-radius:10px;
+    border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer;
+    display:inline-block;
+  }
+  button:hover, label.filebtn:hover{border-color:var(--accent);}
+  .status{font-size:0.8rem; color:var(--muted); margin-bottom:16px;}
+  .transcript{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px; line-height:2; font-size:1.05rem;}
+  .sentence{padding:4px 6px; border-radius:8px; margin:2px 0;}
+  .sentence.active{background:var(--sentence-active);}
+  .word{cursor:pointer; padding:1px 2px; border-radius:4px;}
+  .word:hover{text-decoration:underline;}
+  .word.active{background:var(--word-active); font-weight:700;}
+  .empty{color:var(--muted); text-align:center; padding:40px 20px;}
+  .player-bar{
+    position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--border);
+    padding:10px 16px; display:flex; align-items:center; gap:10px;
+  }
+  .player-bar button{flex:0 0 auto;}
+  .player-bar input[type=range]{flex:1;}
+  .time{font-size:0.78rem; color:var(--muted); min-width:80px; text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎧 逐字稿同步播放器</h1>
+  <div class="sub">選音檔 + 對應的同步 JSON，播放時會自動捲到當下那句、當下那個字會變色</div>
+  <div class="note">音檔跟同步逐字稿都只在你自己的裝置上選取播放，不會上傳到任何地方。</div>
+
+  <div class="pickers">
+    <label class="filebtn" for="audioInput">選擇音檔 (mp3)</label>
+    <input type="file" id="audioInput" accept="audio/*">
+    <label class="filebtn" for="syncInput">選擇同步逐字稿 (json)</label>
+    <input type="file" id="syncInput" accept=".json,application/json">
+  </div>
+  <div class="status" id="status"></div>
+
+  <div class="transcript" id="transcript"><div class="empty">請先選擇音檔和同步逐字稿</div></div>
+</div>
+
+<audio id="audio"></audio>
+<div class="player-bar">
+  <button id="btnPlayPause">▶️</button>
+  <input type="range" id="seekBar" min="0" max="0" step="0.01" value="0">
+  <span class="time" id="timeLabel">0:00 / 0:00</span>
+</div>
+
+<script>
+  const audioInput = document.getElementById('audioInput');
+  const syncInput = document.getElementById('syncInput');
+  const statusEl = document.getElementById('status');
+  const transcriptEl = document.getElementById('transcript');
+  const audio = document.getElementById('audio');
+  const btnPlayPause = document.getElementById('btnPlayPause');
+  const seekBar = document.getElementById('seekBar');
+  const timeLabel = document.getElementById('timeLabel');
+
+  let syncData = null;
+  let flatWords = []; // { el, start, end }
+  let sentenceEls = []; // { el, start, end }
+  let audioReady = false;
+  let syncReady = false;
+
+  function formatTime(s){
+    if (!isFinite(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  }
+
+  function updateStatus(){
+    if (audioReady && syncReady) {
+      statusEl.textContent = '就緒，可以播放了';
+    } else {
+      statusEl.textContent = `已選：${audioReady ? '音檔 ✓' : '音檔 ✗'}　${syncReady ? '同步稿 ✓' : '同步稿 ✗'}`;
+    }
+  }
+
+  audioInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    audio.src = URL.createObjectURL(file);
+    audioReady = true;
+    updateStatus();
+  });
+
+  syncInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        syncData = JSON.parse(ev.target.result);
+        renderTranscript(syncData);
+        syncReady = true;
+        updateStatus();
+      } catch (err) {
+        alert('同步逐字稿讀取失敗：' + err.message);
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+  });
+
+  function renderTranscript(data){
+    transcriptEl.innerHTML = '';
+    flatWords = [];
+    sentenceEls = [];
+    data.sentences.forEach((sentence) => {
+      const sEl = document.createElement('p');
+      sEl.className = 'sentence';
+      sentence.words.forEach((w, i) => {
+        const wEl = document.createElement('span');
+        wEl.className = 'word';
+        wEl.textContent = w.text + (i < sentence.words.length - 1 ? ' ' : '');
+        wEl.addEventListener('click', () => {
+          audio.currentTime = w.start;
+          audio.play();
+        });
+        sEl.appendChild(wEl);
+        flatWords.push({ el: wEl, start: w.start, end: w.end });
+      });
+      transcriptEl.appendChild(sEl);
+      sentenceEls.push({ el: sEl, start: sentence.start, end: sentence.end });
+    });
+  }
+
+  // Binary search for the last word whose start <= t
+  function findWordIndex(t){
+    let lo = 0, hi = flatWords.length - 1, ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (flatWords[mid].start <= t) { ans = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return ans;
+  }
+
+  let currentWordIdx = -1;
+  let currentSentenceIdx = -1;
+
+  function updateHighlight(t){
+    const idx = findWordIndex(t);
+    if (idx === currentWordIdx) return;
+
+    if (currentWordIdx >= 0) flatWords[currentWordIdx].el.classList.remove('active');
+    currentWordIdx = idx;
+    if (idx >= 0) flatWords[idx].el.classList.add('active');
+
+    let sIdx = -1;
+    for (let i = 0; i < sentenceEls.length; i++) {
+      if (t >= sentenceEls[i].start && t <= sentenceEls[i].end) { sIdx = i; break; }
+    }
+    if (sIdx !== currentSentenceIdx) {
+      if (currentSentenceIdx >= 0) sentenceEls[currentSentenceIdx].el.classList.remove('active');
+      currentSentenceIdx = sIdx;
+      if (sIdx >= 0) {
+        sentenceEls[sIdx].el.classList.add('active');
+        sentenceEls[sIdx].el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    }
+  }
+
+  function tick(){
+    if (!audio.paused) {
+      updateHighlight(audio.currentTime);
+      requestAnimationFrame(tick);
+    }
+  }
+  audio.addEventListener('play', () => { btnPlayPause.textContent = '⏸️'; requestAnimationFrame(tick); });
+  audio.addEventListener('pause', () => { btnPlayPause.textContent = '▶️'; });
+  audio.addEventListener('seeked', () => updateHighlight(audio.currentTime));
+  audio.addEventListener('loadedmetadata', () => { seekBar.max = audio.duration; });
+  audio.addEventListener('timeupdate', () => {
+    seekBar.value = audio.currentTime;
+    timeLabel.textContent = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
+  });
+
+  btnPlayPause.addEventListener('click', () => {
+    if (!audioReady) return;
+    if (audio.paused) audio.play(); else audio.pause();
+  });
+  seekBar.addEventListener('input', () => {
+    audio.currentTime = Number(seekBar.value);
+    updateHighlight(audio.currentTime);
+  });
+
+  updateStatus();
+</script>
+</body>
+</html>
