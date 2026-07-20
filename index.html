@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MP3 循環播放器</title>
+<style>
+  :root{
+    --bg:#f5f3ef; --card:#ffffff; --text:#1f1b16; --muted:#7a7368;
+    --accent:#c1440e; --accent2:#2f6f4e; --border:#e2ddd3;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#181512; --card:#242019; --text:#f2ede4; --muted:#a89e8f;
+      --accent:#e07b45; --accent2:#5fae83; --border:#3a342b;
+    }
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,"Segoe UI",Helvetica,Arial,"PingFang TC","Microsoft JhengHei",sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh;
+  }
+  .wrap{max-width:520px; margin:0 auto; padding:24px 16px 60px;}
+  h1{font-size:1.3rem; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:0.85rem; margin-bottom:20px;}
+  input[type=file]{display:none;}
+  button{
+    font-family:inherit; font-size:0.95rem; padding:12px 16px; border-radius:10px;
+    border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer;
+  }
+  button:hover{border-color:var(--accent);}
+  button.primary{background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600;}
+  #btnPick{width:100%; margin-bottom:16px;}
+  .now-playing{font-weight:700; margin:16px 0 10px; min-height:1.4em;}
+  .list{background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:16px;}
+  .track-item{padding:12px 14px; border-bottom:1px solid var(--border); cursor:pointer; font-size:0.9rem;}
+  .track-item:last-child{border-bottom:none;}
+  .track-item.active{background:var(--accent); color:#fff; font-weight:700;}
+  .controls{display:flex; gap:10px; justify-content:center;}
+  .controls button{flex:1; padding:14px;}
+  .empty{color:var(--muted); text-align:center; padding:20px; font-size:0.85rem;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎵 MP3 循環播放器</h1>
+  <div class="sub">選幾首 mp3，會依序播放，播完全部自動從頭循環（選 1 首就單曲循環）</div>
+
+  <input type="file" id="fileInput" accept="audio/*" multiple>
+  <button id="btnPick" class="primary">選擇音樂檔案</button>
+
+  <div class="now-playing" id="nowPlaying"></div>
+  <div class="list" id="trackList"><div class="empty">還沒選擇任何檔案</div></div>
+
+  <audio id="player"></audio>
+  <div class="controls">
+    <button id="btnPrev">⏮ 上一首</button>
+    <button id="btnPlayPause" class="primary">▶️ 播放</button>
+    <button id="btnNext">⏭ 下一首</button>
+  </div>
+</div>
+
+<script>
+  const fileInput = document.getElementById('fileInput');
+  const btnPick = document.getElementById('btnPick');
+  const trackListEl = document.getElementById('trackList');
+  const nowPlayingEl = document.getElementById('nowPlaying');
+  const player = document.getElementById('player');
+  const btnPlayPause = document.getElementById('btnPlayPause');
+  const btnPrev = document.getElementById('btnPrev');
+  const btnNext = document.getElementById('btnNext');
+
+  let tracks = []; // { name, url }
+  let currentIndex = 0;
+
+  btnPick.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+    tracks.forEach(t => URL.revokeObjectURL(t.url));
+    tracks = files.map(f => ({ name: f.name, url: URL.createObjectURL(f) }));
+    currentIndex = 0;
+    renderTrackList();
+    loadTrack(currentIndex);
+    player.play();
+  });
+
+  function renderTrackList(){
+    if (tracks.length === 0) {
+      trackListEl.innerHTML = '<div class="empty">還沒選擇任何檔案</div>';
+      return;
+    }
+    trackListEl.innerHTML = '';
+    tracks.forEach((t, i) => {
+      const item = document.createElement('div');
+      item.className = 'track-item' + (i === currentIndex ? ' active' : '');
+      item.textContent = `${i + 1}. ${t.name}`;
+      item.addEventListener('click', () => {
+        loadTrack(i);
+        player.play();
+      });
+      trackListEl.appendChild(item);
+    });
+  }
+
+  // Wraps with modulo so this naturally loops the whole selection -
+  // 1 track loops itself, N tracks loop the whole playlist.
+  function loadTrack(index){
+    if (tracks.length === 0) return;
+    currentIndex = ((index % tracks.length) + tracks.length) % tracks.length;
+    player.src = tracks[currentIndex].url;
+    nowPlayingEl.textContent = `正在播放：${tracks[currentIndex].name}`;
+    renderTrackList();
+  }
+
+  player.addEventListener('ended', () => {
+    loadTrack(currentIndex + 1);
+    player.play();
+  });
+  player.addEventListener('play', () => { btnPlayPause.textContent = '⏸ 暫停'; });
+  player.addEventListener('pause', () => { btnPlayPause.textContent = '▶️ 播放'; });
+
+  btnPlayPause.addEventListener('click', () => {
+    if (tracks.length === 0) return;
+    if (player.paused) player.play(); else player.pause();
+  });
+  btnPrev.addEventListener('click', () => { loadTrack(currentIndex - 1); player.play(); });
+  btnNext.addEventListener('click', () => { loadTrack(currentIndex + 1); player.play(); });
+</script>
+</body>
+</html>
