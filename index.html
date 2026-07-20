@@ -46,7 +46,7 @@
   <h1>🎵 MP3 循環播放器</h1>
   <div class="sub">選幾首 mp3，會依序播放，播完全部自動從頭循環（選 1 首就單曲循環）</div>
 
-  <input type="file" id="fileInput" accept="audio/*" multiple>
+  <input type="file" id="fileInput" multiple>
   <button id="btnPick" class="primary">選擇音樂檔案</button>
 
   <div class="now-playing" id="nowPlaying"></div>
@@ -75,9 +75,15 @@
 
   btnPick.addEventListener('click', () => fileInput.click());
 
+  const AUDIO_EXT_RE = /\.(mp3|m4a|wav|aac|ogg|flac|opus)$/i;
+
   fileInput.addEventListener('change', (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
+    const picked = Array.from(e.target.files);
+    if (picked.length === 0) return;
+    // Some files report an empty file.type (e.g. iCloud files not yet
+    // downloaded to the device), so filter by extension too, not just MIME type.
+    const files = picked.filter(f => f.type.startsWith('audio/') || AUDIO_EXT_RE.test(f.name));
+    if (files.length === 0) { alert('沒有找到音樂檔案，請確認選的是 mp3 之類的音訊檔'); return; }
     tracks.forEach(t => URL.revokeObjectURL(t.url));
     tracks = files.map(f => ({ name: f.name, url: URL.createObjectURL(f) }));
     currentIndex = 0;
