@@ -32,7 +32,13 @@
     display:inline-block;
   }
   button:hover, label.filebtn:hover{border-color:var(--accent);}
-  .status{font-size:0.8rem; color:var(--muted); margin-bottom:16px;}
+  .status{font-size:0.8rem; color:var(--muted); margin-bottom:12px;}
+  .playlist{background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:16px;}
+  .track{padding:10px 14px; border-bottom:1px solid var(--border); cursor:pointer; font-size:0.9rem; display:flex; justify-content:space-between; gap:8px;}
+  .track:last-child{border-bottom:none;}
+  .track.active{background:var(--accent); color:#fff; font-weight:700;}
+  .track .missing{color:var(--muted); font-size:0.78rem;}
+  .track.active .missing{color:rgba(255,255,255,.8);}
   .transcript{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px; line-height:2; font-size:1.05rem;}
   .sentence{padding:4px 6px; border-radius:8px; margin:2px 0;}
   .sentence.active{background:var(--sentence-active);}
@@ -52,17 +58,18 @@
 <body>
 <div class="wrap">
   <h1>🎧 逐字稿同步播放器</h1>
-  <div class="sub">選音檔 + 對應的同步 JSON，播放時會自動捲到當下那句、當下那個字會變色</div>
+  <div class="sub">一次選一課的 mp3（可多選）跟對應的同步 JSON（可多選），會依 MAIN → VOCAB → MINI_STORY → POV 自動配對、依序播放，播完整輪循環</div>
   <div class="note">音檔跟同步逐字稿都只在你自己的裝置上選取播放，不會上傳到任何地方。</div>
 
   <div class="pickers">
-    <label class="filebtn" for="audioInput">選擇音檔 (mp3)</label>
-    <input type="file" id="audioInput">
-    <label class="filebtn" for="syncInput">選擇同步逐字稿 (json)</label>
-    <input type="file" id="syncInput">
+    <label class="filebtn" for="audioInput">選擇音檔們 (mp3，可多選)</label>
+    <input type="file" id="audioInput" multiple>
+    <label class="filebtn" for="syncInput">選擇同步逐字稿們 (json，可多選)</label>
+    <input type="file" id="syncInput" multiple>
   </div>
   <div class="status" id="status"></div>
 
+  <div class="playlist hidden" id="playlist"></div>
   <div class="transcript" id="transcript"><div class="empty">請先選擇音檔和同步逐字稿</div></div>
 </div>
 
@@ -77,17 +84,37 @@
   const audioInput = document.getElementById('audioInput');
   const syncInput = document.getElementById('syncInput');
   const statusEl = document.getElementById('status');
+  const playlistEl = document.getElementById('playlist');
   const transcriptEl = document.getElementById('transcript');
   const audio = document.getElementById('audio');
   const btnPlayPause = document.getElementById('btnPlayPause');
   const seekBar = document.getElementById('seekBar');
   const timeLabel = document.getElementById('timeLabel');
 
-  let syncData = null;
+  const TYPE_ORDER = ['MAIN', 'VOCAB', 'MINI_STORY', 'POV'];
+  const TYPE_LABEL = { MAIN: 'Main', VOCAB: 'Vocab', MINI_STORY: 'Mini Story', POV: 'POV' };
+  const POSITION_TYPE = { 1: 'MAIN', 2: 'VOCAB', 3: 'MINI_STORY', 4: 'POV' };
+
+  let audioFiles = [];
+  let syncFiles = [];
+  let playlist = []; // { type, audioFile, syncFile }
+  let trackIndex = -1;
+
   let flatWords = []; // { el, start, end }
   let sentenceEls = []; // { el, start, end }
-  let audioReady = false;
-  let syncReady = false;
+  let currentWordIdx = -1;
+  let currentSentenceIdx = -1;
+
+  function detectType(filename){
+    const name = filename.toLowerCase();
+    if (name.includes('pov')) return 'POV';
+    if (name.includes('vocab')) return 'VOCAB';
+    if (name.includes('mini') || /\bms\b/.test(name)) return 'MINI_STORY';
+    if (name.includes('main')) return 'MAIN';
+    const m = filename.match(/^(\d+)_/);
+    if (m) return POSITION_TYPE[Number(m[1])] || null;
+    return null;
+  }
 
   function formatTime(s){
     if (!isFinite(s)) return '0:00';
@@ -96,43 +123,94 @@
     return `${m}:${sec.toString().padStart(2, '0')}`;
   }
 
-  function updateStatus(){
-    if (audioReady && syncReady) {
-      statusEl.textContent = '就緒，可以播放了';
-    } else {
-      statusEl.textContent = `已選：${audioReady ? '音檔 ✓' : '音檔 ✗'}　${syncReady ? '同步稿 ✓' : '同步稿 ✗'}`;
+  const AUDIO_EXT_RE = /\.(mp3|m4a|wav|aac|ogg|flac|opus)(\.mp3)?$/i;
+  const JSON_EXT_RE = /\.json$/i;
+
+  audioInput.addEventListener('change', (e) => {
+    // Selecting a whole lesson folder also picks up the PDFs sitting next to
+    // the mp3s - keep only files that actually look like audio.
+    audioFiles = Array.from(e.target.files).filter(
+      (f) => f.type.startsWith('audio/') || AUDIO_EXT_RE.test(f.name)
+    );
+    rebuildPlaylist();
+  });
+  syncInput.addEventListener('change', (e) => {
+    syncFiles = Array.from(e.target.files).filter(
+      (f) => f.type === 'application/json' || JSON_EXT_RE.test(f.name)
+    );
+    rebuildPlaylist();
+  });
+
+  function rebuildPlaylist(){
+    const audioByType = {};
+    audioFiles.forEach((f) => { const t = detectType(f.name); if (t && !audioByType[t]) audioByType[t] = f; });
+    const syncByType = {};
+    syncFiles.forEach((f) => { const t = detectType(f.name); if (t && !syncByType[t]) syncByType[t] = f; });
+
+    playlist = TYPE_ORDER
+      .filter((t) => audioByType[t])
+      .map((t) => ({ type: t, audioFile: audioByType[t], syncFile: syncByType[t] || null }));
+
+    const withSync = playlist.filter((t) => t.syncFile).length;
+    statusEl.textContent = playlist.length
+      ? `配對到 ${playlist.length} 段（${withSync} 段有逐字稿）`
+      : `已選：音檔 ${audioFiles.length} 個、逐字稿 ${syncFiles.length} 個（還沒配對出任何一段，請確認檔名有 MAIN/VOCAB/MINI_STORY/POV 之類的關鍵字）`;
+
+    renderPlaylistUI();
+    if (playlist.length) {
+      trackIndex = 0;
+      loadTrack(0);
     }
   }
 
-  audioInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    audio.src = URL.createObjectURL(file);
-    audioReady = true;
-    updateStatus();
-  });
+  function renderPlaylistUI(){
+    if (playlist.length === 0) {
+      playlistEl.classList.add('hidden');
+      playlistEl.innerHTML = '';
+      return;
+    }
+    playlistEl.classList.remove('hidden');
+    playlistEl.innerHTML = '';
+    playlist.forEach((track, i) => {
+      const row = document.createElement('div');
+      row.className = 'track' + (i === trackIndex ? ' active' : '');
+      row.innerHTML = `<span>${TYPE_LABEL[track.type]}</span>` + (track.syncFile ? '' : '<span class="missing">沒有逐字稿</span>');
+      row.addEventListener('click', () => { trackIndex = i; loadTrack(i); audio.play(); });
+      playlistEl.appendChild(row);
+    });
+  }
 
-  syncInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        syncData = JSON.parse(ev.target.result);
-        renderTranscript(syncData);
-        syncReady = true;
-        updateStatus();
-      } catch (err) {
-        alert('同步逐字稿讀取失敗：' + err.message);
-      }
-    };
-    reader.readAsText(file, 'UTF-8');
-  });
+  function loadTrack(index){
+    if (playlist.length === 0) return;
+    trackIndex = ((index % playlist.length) + playlist.length) % playlist.length;
+    const track = playlist[trackIndex];
+    audio.src = URL.createObjectURL(track.audioFile);
+
+    if (track.syncFile) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = JSON.parse(ev.target.result);
+          renderTranscript(data);
+        } catch (err) {
+          transcriptEl.innerHTML = `<div class="empty">同步逐字稿讀取失敗：${err.message}</div>`;
+        }
+      };
+      reader.readAsText(track.syncFile, 'UTF-8');
+    } else {
+      transcriptEl.innerHTML = '<div class="empty">這一段沒有對應的逐字稿，只能單純播放</div>';
+      flatWords = [];
+      sentenceEls = [];
+    }
+    renderPlaylistUI();
+  }
 
   function renderTranscript(data){
     transcriptEl.innerHTML = '';
     flatWords = [];
     sentenceEls = [];
+    currentWordIdx = -1;
+    currentSentenceIdx = -1;
     data.sentences.forEach((sentence) => {
       const sEl = document.createElement('p');
       sEl.className = 'sentence';
@@ -163,10 +241,8 @@
     return ans;
   }
 
-  let currentWordIdx = -1;
-  let currentSentenceIdx = -1;
-
   function updateHighlight(t){
+    if (flatWords.length === 0) return;
     const idx = findWordIndex(t);
     if (idx === currentWordIdx) return;
 
@@ -202,17 +278,19 @@
     seekBar.value = audio.currentTime;
     timeLabel.textContent = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
   });
+  audio.addEventListener('ended', () => {
+    loadTrack(trackIndex + 1);
+    audio.play();
+  });
 
   btnPlayPause.addEventListener('click', () => {
-    if (!audioReady) return;
+    if (playlist.length === 0) return;
     if (audio.paused) audio.play(); else audio.pause();
   });
   seekBar.addEventListener('input', () => {
     audio.currentTime = Number(seekBar.value);
     updateHighlight(audio.currentTime);
   });
-
-  updateStatus();
 </script>
 </body>
 </html>
