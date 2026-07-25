@@ -276,12 +276,28 @@
     }
   }
 
+  // Whisper's word timestamps are sometimes cut a little too tight, clipping
+  // the onset consonant or trailing sound (e.g. "strong" -> "trong"). Pad the
+  // loop boundaries a bit, but never past the neighboring word's own audio.
+  const REPEAT_PAD_START = 0.12;
+  const REPEAT_PAD_END = 0.2;
+
+  function computeRepeatBounds(startIdx, endIdx){
+    const prevEnd = startIdx > 0 ? flatWords[startIdx - 1].end : 0;
+    const nextStart = endIdx < flatWords.length - 1 ? flatWords[endIdx + 1].start : Infinity;
+    const audioEnd = isFinite(audio.duration) ? audio.duration : Infinity;
+    const playStart = Math.max(prevEnd, flatWords[startIdx].start - REPEAT_PAD_START);
+    const playEnd = Math.min(nextStart, audioEnd, flatWords[endIdx].end + REPEAT_PAD_END);
+    return { playStart, playEnd };
+  }
+
   function setRepeatRange(startIdx, endIdx){
     clearRepeatHighlight();
-    repeatRange = { startIdx, endIdx };
+    const { playStart, playEnd } = computeRepeatBounds(startIdx, endIdx);
+    repeatRange = { startIdx, endIdx, playStart, playEnd };
     for (let i = startIdx; i <= endIdx; i++) flatWords[i].el.classList.add('in-repeat');
     updateRepeatStatus();
-    audio.currentTime = flatWords[startIdx].start;
+    audio.currentTime = playStart;
     audio.play();
   }
 
@@ -354,8 +370,8 @@
 
   function tick(){
     if (!audio.paused) {
-      if (repeatRange && audio.currentTime >= flatWords[repeatRange.endIdx].end) {
-        audio.currentTime = flatWords[repeatRange.startIdx].start;
+      if (repeatRange && audio.currentTime >= repeatRange.playEnd) {
+        audio.currentTime = repeatRange.playStart;
       }
       updateHighlight(audio.currentTime);
       requestAnimationFrame(tick);
