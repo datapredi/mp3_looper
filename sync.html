@@ -71,6 +71,10 @@
   .player-bar button{flex:0 0 auto;}
   .player-bar input[type=range]{flex:1;}
   .time{font-size:0.78rem; color:var(--muted); min-width:80px; text-align:center;}
+  #speedSelect{
+    flex:0 0 auto; font-family:inherit; font-size:0.85rem; padding:8px 6px; border-radius:8px;
+    border:1px solid var(--border); background:var(--card); color:var(--text);
+  }
 </style>
 </head>
 <body>
@@ -101,6 +105,12 @@
 <div class="player-bar">
   <button id="btnPlayPause">▶️</button>
   <input type="range" id="seekBar" min="0" max="0" step="0.01" value="0">
+  <select id="speedSelect">
+    <option value="0.7">0.7x</option>
+    <option value="1" selected>1x</option>
+    <option value="1.25">1.25x</option>
+    <option value="1.5">1.5x</option>
+  </select>
   <span class="time" id="timeLabel">0:00 / 0:00</span>
 </div>
 
@@ -115,6 +125,10 @@
   const btnPlayPause = document.getElementById('btnPlayPause');
   const seekBar = document.getElementById('seekBar');
   const timeLabel = document.getElementById('timeLabel');
+  const speedSelect = document.getElementById('speedSelect');
+  speedSelect.addEventListener('change', () => {
+    audio.playbackRate = Number(speedSelect.value);
+  });
 
   const TYPE_ORDER = ['MAIN', 'VOCAB', 'MINI_STORY', 'POV'];
   const TYPE_LABEL = { MAIN: 'Main', VOCAB: 'Vocab', MINI_STORY: 'Mini Story', POV: 'POV' };
@@ -474,7 +488,10 @@
   audio.addEventListener('play', () => { btnPlayPause.textContent = '⏸️'; requestAnimationFrame(tick); });
   audio.addEventListener('pause', () => { btnPlayPause.textContent = '▶️'; });
   audio.addEventListener('seeked', () => updateHighlight(audio.currentTime));
-  audio.addEventListener('loadedmetadata', () => { seekBar.max = audio.duration; });
+  audio.addEventListener('loadedmetadata', () => {
+    seekBar.max = audio.duration;
+    audio.playbackRate = Number(speedSelect.value);
+  });
   audio.addEventListener('timeupdate', () => {
     seekBar.value = audio.currentTime;
     timeLabel.textContent = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
