@@ -37,10 +37,11 @@
   }
   button:hover, label.filebtn:hover{border-color:var(--accent);}
   .status{font-size:0.8rem; color:var(--muted); margin-bottom:12px;}
-  .playlist{background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:16px;}
-  .track{padding:10px 14px; border-bottom:1px solid var(--border); cursor:pointer; font-size:0.9rem; display:flex; justify-content:space-between; gap:8px;}
-  .track:last-child{border-bottom:none;}
-  .track.active{background:var(--accent); color:#fff; font-weight:700;}
+  .playlist, .lessons{background:var(--card); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:16px;}
+  .lessons{max-height:260px; overflow-y:auto;}
+  .track, .lesson-item{padding:10px 14px; border-bottom:1px solid var(--border); cursor:pointer; font-size:0.9rem; display:flex; justify-content:space-between; gap:8px;}
+  .track:last-child, .lesson-item:last-child{border-bottom:none;}
+  .track.active, .lesson-item.active{background:var(--accent); color:#fff; font-weight:700;}
   .track .missing{color:var(--muted); font-size:0.78rem;}
   .track.active .missing{color:rgba(255,255,255,.8);}
   .transcript{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px; line-height:2; font-size:1.05rem;}
@@ -80,14 +81,14 @@
 <body>
 <div class="wrap">
   <h1>🎧 逐字稿同步播放器</h1>
-  <div class="sub">一次選一課的 mp3（可多選）跟對應的同步 JSON（可多選），會依 MAIN → VOCAB → MINI_STORY → POV 自動配對、依序播放，播完整輪循環</div>
+  <div class="sub">分別選「mp3 最上層資料夾」跟「逐字稿最上層資料夾」各一次，裡面的每個課程子資料夾會自動抓出來、依資料夾名稱互相配對，之後只要點清單切換課程就好，不用再開檔案選擇器</div>
   <div class="note">音檔跟同步逐字稿都只在你自己的裝置上選取播放，不會上傳到任何地方。</div>
 
   <div class="pickers">
-    <label class="filebtn" for="audioInput">選擇音檔們 (mp3，可多選)</label>
-    <input type="file" id="audioInput" multiple>
-    <label class="filebtn" for="syncInput">選擇同步逐字稿們 (json，可多選)</label>
-    <input type="file" id="syncInput" multiple>
+    <label class="filebtn" for="audioInput">選擇 mp3 最上層資料夾</label>
+    <input type="file" id="audioInput" webkitdirectory multiple>
+    <label class="filebtn" for="syncInput">選擇逐字稿最上層資料夾</label>
+    <input type="file" id="syncInput" webkitdirectory multiple>
   </div>
   <div class="pickers">
     <input type="password" id="apiKeyInput" placeholder="Anthropic API Key (sk-ant-...)">
@@ -96,6 +97,7 @@
   <div class="note">用來點句子顯示中文翻譯。Key 只存在這台裝置的瀏覽器裡，不會上傳到任何地方。</div>
   <div class="status" id="status"></div>
 
+  <div class="lessons hidden" id="lessons"></div>
   <div class="playlist hidden" id="playlist"></div>
   <div class="repeat-status hidden" id="repeatStatus"></div>
   <div class="transcript" id="transcript"><div class="empty">請先選擇音檔和同步逐字稿</div></div>
@@ -118,6 +120,7 @@
   const audioInput = document.getElementById('audioInput');
   const syncInput = document.getElementById('syncInput');
   const statusEl = document.getElementById('status');
+  const lessonsEl = document.getElementById('lessons');
   const playlistEl = document.getElementById('playlist');
   const repeatStatusEl = document.getElementById('repeatStatus');
   const transcriptEl = document.getElementById('transcript');
@@ -138,6 +141,11 @@
   let syncFiles = [];
   let playlist = []; // { type, audioFile, syncFile }
   let trackIndex = -1;
+
+  let lessonAudioFiles = {}; // { lessonFolderName: File[] }
+  let lessonSyncFiles = {};
+  let lessonNames = [];
+  let currentLesson = null;
 
   let flatWords = []; // { el, start, end }
   let sentenceEls = []; // { el, start, end }
@@ -220,20 +228,84 @@
   const AUDIO_EXT_RE = /\.(mp3|m4a|wav|aac|ogg|flac|opus)(\.mp3)?$/i;
   const JSON_EXT_RE = /\.json$/i;
 
+  // webkitDirectory gives each file a relativePath like "<selected root>/<lesson folder>/<file>".
+  // If the user selects a single lesson folder directly (only 2 path segments),
+  // treat the whole selection as one lesson named after that folder.
+  function getLessonName(file){
+    const rel = file.webkitRelativePath || file.name;
+    const parts = rel.split('/');
+    return parts.length <= 2 ? parts[0] : parts[1];
+  }
+
+  function groupByLesson(fileList, extTest, mimePrefix){
+    const map = {};
+    Array.from(fileList).forEach((f) => {
+      const looksRight = (mimePrefix && f.type.startsWith(mimePrefix)) || extTest.test(f.name);
+      if (!looksRight) return;
+      const lesson = getLessonName(f);
+      if (!lesson) return;
+      (map[lesson] = map[lesson] || []).push(f);
+    });
+    return map;
+  }
+
   audioInput.addEventListener('change', (e) => {
-    // Selecting a whole lesson folder also picks up the PDFs sitting next to
-    // the mp3s - keep only files that actually look like audio.
-    audioFiles = Array.from(e.target.files).filter(
-      (f) => f.type.startsWith('audio/') || AUDIO_EXT_RE.test(f.name)
-    );
-    rebuildPlaylist();
+    lessonAudioFiles = groupByLesson(e.target.files, AUDIO_EXT_RE, 'audio/');
+    rebuildLessonList();
   });
   syncInput.addEventListener('change', (e) => {
-    syncFiles = Array.from(e.target.files).filter(
-      (f) => f.type === 'application/json' || JSON_EXT_RE.test(f.name)
-    );
-    rebuildPlaylist();
+    lessonSyncFiles = groupByLesson(e.target.files, JSON_EXT_RE, 'application/json');
+    rebuildLessonList();
   });
+
+  function rebuildLessonList(){
+    const names = new Set([...Object.keys(lessonAudioFiles), ...Object.keys(lessonSyncFiles)]);
+    lessonNames = Array.from(names).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+
+    statusEl.textContent = lessonNames.length
+      ? `已載入 ${lessonNames.length} 課`
+      : '請分別選擇 mp3 跟逐字稿的最上層資料夾';
+
+    renderLessonListUI();
+
+    if (lessonNames.length === 0) {
+      currentLesson = null;
+      audioFiles = [];
+      syncFiles = [];
+      rebuildPlaylist();
+    } else if (!currentLesson || !lessonNames.includes(currentLesson)) {
+      selectLesson(lessonNames[0]);
+    } else {
+      selectLesson(currentLesson);
+    }
+  }
+
+  function renderLessonListUI(){
+    if (lessonNames.length === 0) {
+      lessonsEl.classList.add('hidden');
+      lessonsEl.innerHTML = '';
+      return;
+    }
+    lessonsEl.classList.remove('hidden');
+    lessonsEl.innerHTML = '';
+    lessonNames.forEach((name) => {
+      const row = document.createElement('div');
+      row.className = 'lesson-item' + (name === currentLesson ? ' active' : '');
+      const hasAudio = !!lessonAudioFiles[name];
+      const hasSync = !!lessonSyncFiles[name];
+      row.innerHTML = `<span>${name}</span>` + (hasAudio && hasSync ? '' : '<span class="missing">' + (hasAudio ? '沒有逐字稿' : '沒有音檔') + '</span>');
+      row.addEventListener('click', () => selectLesson(name));
+      lessonsEl.appendChild(row);
+    });
+  }
+
+  function selectLesson(name){
+    currentLesson = name;
+    audioFiles = lessonAudioFiles[name] || [];
+    syncFiles = lessonSyncFiles[name] || [];
+    renderLessonListUI();
+    rebuildPlaylist();
+  }
 
   function rebuildPlaylist(){
     const audioByType = {};
@@ -245,15 +317,15 @@
       .filter((t) => audioByType[t])
       .map((t) => ({ type: t, audioFile: audioByType[t], syncFile: syncByType[t] || null }));
 
-    const withSync = playlist.filter((t) => t.syncFile).length;
-    statusEl.textContent = playlist.length
-      ? `配對到 ${playlist.length} 段（${withSync} 段有逐字稿）`
-      : `已選：音檔 ${audioFiles.length} 個、逐字稿 ${syncFiles.length} 個（還沒配對出任何一段，請確認檔名有 MAIN/VOCAB/MINI_STORY/POV 之類的關鍵字）`;
-
     renderPlaylistUI();
     if (playlist.length) {
       trackIndex = 0;
       loadTrack(0);
+    } else {
+      transcriptEl.innerHTML = '<div class="empty">這個資料夾配對不出任何一段，請確認檔名有 MAIN/VOCAB/MINI_STORY/POV 之類的關鍵字</div>';
+      flatWords = [];
+      sentenceEls = [];
+      clearRepeatRange();
     }
   }
 
