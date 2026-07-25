@@ -81,11 +81,11 @@
 <body>
 <div class="wrap">
   <h1>🎧 逐字稿同步播放器</h1>
-  <div class="sub">分別選「mp3 最上層資料夾」跟「逐字稿最上層資料夾」各一次，裡面的每個課程子資料夾會自動抓出來、依資料夾名稱互相配對，之後只要點清單切換課程就好，不用再開檔案選擇器</div>
+  <div class="sub">逐字稿可以直接選「最上層資料夾」一次載入全部 30 課。mp3 因為檔案太大太多，手機一次載入整個上層資料夾會當機，請一課一課選 mp3 資料夾——但每一課只要選過一次，就會永久記住，之後開頁面直接出現在清單上，不用再選第二次。</div>
   <div class="note">音檔跟同步逐字稿都只在你自己的裝置上選取播放，不會上傳到任何地方。</div>
 
   <div class="pickers">
-    <label class="filebtn" for="audioInput">選擇 mp3 最上層資料夾</label>
+    <label class="filebtn" for="audioInput">選擇「單一課」的 mp3 資料夾</label>
     <input type="file" id="audioInput" webkitdirectory multiple>
     <label class="filebtn" for="syncInput">選擇逐字稿最上層資料夾</label>
     <input type="file" id="syncInput" webkitdirectory multiple>
@@ -228,6 +228,54 @@
   const AUDIO_EXT_RE = /\.(mp3|m4a|wav|aac|ogg|flac|opus)(\.mp3)?$/i;
   const JSON_EXT_RE = /\.json$/i;
 
+  // Selecting the whole mp3 course folder in one go crashes iOS Safari (too
+  // many large files to materialize from iCloud at once), so mp3s have to be
+  // picked one lesson-folder at a time. To make that a one-time cost instead
+  // of a per-visit one, every picked mp3 is cached into IndexedDB and
+  // reloaded automatically on the next visit - no browser has a size problem
+  // with local IndexedDB reads, only with the iCloud directory picker itself.
+  const AUDIO_DB_NAME = "sync_audio_cache";
+  const AUDIO_STORE_NAME = "files";
+
+  function openAudioDB(){
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(AUDIO_DB_NAME, 1);
+      req.onupgradeneeded = () => { req.result.createObjectStore(AUDIO_STORE_NAME); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function cacheAudioFile(lesson, file){
+    const db = await openAudioDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(AUDIO_STORE_NAME, "readwrite");
+      tx.objectStore(AUDIO_STORE_NAME).put({ blob: file, name: file.name, type: file.type }, `${lesson}::${file.name}`);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function loadCachedAudioFiles(){
+    const db = await openAudioDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(AUDIO_STORE_NAME, "readonly");
+      const req = tx.objectStore(AUDIO_STORE_NAME).openCursor();
+      const map = {};
+      req.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (!cursor) { resolve(map); return; }
+        const sep = cursor.primaryKey.indexOf('::');
+        const lesson = cursor.primaryKey.slice(0, sep);
+        const rec = cursor.value;
+        const file = new File([rec.blob], rec.name, { type: rec.type });
+        (map[lesson] = map[lesson] || []).push(file);
+        cursor.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   // webkitDirectory gives each file a relativePath like "<selected root>/<lesson folder>/<file>".
   // If the user selects a single lesson folder directly (only 2 path segments),
   // treat the whole selection as one lesson named after that folder.
@@ -249,14 +297,25 @@
     return map;
   }
 
-  audioInput.addEventListener('change', (e) => {
-    lessonAudioFiles = groupByLesson(e.target.files, AUDIO_EXT_RE, 'audio/');
+  audioInput.addEventListener('change', async (e) => {
+    const grouped = groupByLesson(e.target.files, AUDIO_EXT_RE, 'audio/');
+    Object.assign(lessonAudioFiles, grouped);
     rebuildLessonList();
+    for (const lesson of Object.keys(grouped)) {
+      for (const f of grouped[lesson]) {
+        try { await cacheAudioFile(lesson, f); } catch (err) { console.warn('audio cache failed', err); }
+      }
+    }
   });
   syncInput.addEventListener('change', (e) => {
     lessonSyncFiles = groupByLesson(e.target.files, JSON_EXT_RE, 'application/json');
     rebuildLessonList();
   });
+
+  loadCachedAudioFiles().then((map) => {
+    Object.assign(lessonAudioFiles, map);
+    rebuildLessonList();
+  }).catch((err) => console.warn('audio cache load failed', err));
 
   function rebuildLessonList(){
     const names = new Set([...Object.keys(lessonAudioFiles), ...Object.keys(lessonSyncFiles)]);
