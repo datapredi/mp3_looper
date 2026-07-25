@@ -46,8 +46,10 @@
   .word:hover{text-decoration:underline;}
   .word.active{background:var(--word-active); font-weight:700;}
   .word.in-repeat{box-shadow: inset 0 -3px 0 var(--accent);}
-  .sentence-repeat-btn{cursor:pointer; opacity:.4; margin-right:6px; font-size:0.85em; user-select:none;}
-  .sentence-repeat-btn:hover{opacity:1;}
+  .sentence-repeat-btn, .sentence-translate-btn{cursor:pointer; opacity:.4; margin-right:6px; font-size:0.85em; user-select:none;}
+  .sentence-repeat-btn:hover, .sentence-translate-btn:hover{opacity:1;}
+  .translation-line{font-size:0.88em; color:var(--muted); margin:2px 0 8px 0; line-height:1.5;}
+  .translation-line.hidden{display:none;}
   .repeat-status{
     background:var(--accent); color:#fff; border-radius:10px; padding:8px 12px; margin-bottom:12px;
     font-size:0.85rem; display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -119,6 +121,50 @@
   let currentWordIdx = -1;
   let currentSentenceIdx = -1;
   let repeatRange = null; // { startIdx, endIdx } into flatWords - the word/phrase/sentence being looped
+
+  // Shares the same localStorage (same origin, datapredi.github.io) as the
+  // indonesian-flashcard site's API key input - no separate setup needed here.
+  const API_KEY_LS = "anthropic_api_key";
+  function getApiKey(){ return localStorage.getItem(API_KEY_LS) || ""; }
+
+  const TRANSLATION_CACHE_LS = "sync_translation_cache";
+  let translationCache = {};
+  try { translationCache = JSON.parse(localStorage.getItem(TRANSLATION_CACHE_LS)) || {}; } catch(e) { translationCache = {}; }
+  function saveTranslationCache(){ localStorage.setItem(TRANSLATION_CACHE_LS, JSON.stringify(translationCache)); }
+
+  async function translateSentence(text){
+    if (translationCache[text]) return translationCache[text];
+    const key = getApiKey();
+    if (!key) throw new Error("請先到 indonesian-flashcard 頁面設定並儲存 Anthropic API Key");
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        max_tokens: 300,
+        messages: [{
+          role: "user",
+          content: `請把這句英文翻譯成自然、口語的繁體中文，只回傳翻譯本身，不要加任何說明或引號：\n\n${text}`
+        }]
+      })
+    });
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errBody.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const block = (data.content || []).find((b) => b.type === "text");
+    if (!block) throw new Error("沒有收到翻譯內容");
+    const zh = block.text.trim();
+    translationCache[text] = zh;
+    saveTranslationCache();
+    return zh;
+  }
 
   function detectType(filename){
     const name = filename.toLowerCase();
@@ -239,6 +285,12 @@
       repeatBtn.title = '重複整句';
       sEl.appendChild(repeatBtn);
 
+      const translateBtn = document.createElement('span');
+      translateBtn.className = 'sentence-translate-btn';
+      translateBtn.textContent = '中';
+      translateBtn.title = '顯示/隱藏中文翻譯';
+      sEl.appendChild(translateBtn);
+
       const sentStartIdx = flatWords.length;
       sentence.words.forEach((w, i) => {
         const wordIdx = flatWords.length;
@@ -256,6 +308,29 @@
       });
 
       transcriptEl.appendChild(sEl);
+
+      const translationLine = document.createElement('div');
+      translationLine.className = 'translation-line hidden';
+      transcriptEl.appendChild(translationLine);
+
+      translateBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!translationLine.classList.contains('hidden')) {
+          translationLine.classList.add('hidden');
+          return;
+        }
+        translationLine.classList.remove('hidden');
+        if (translationLine.dataset.loaded === '1') return;
+        translationLine.textContent = '翻譯中...';
+        try {
+          const zh = await translateSentence(sentence.text);
+          translationLine.textContent = zh;
+          translationLine.dataset.loaded = '1';
+        } catch (err) {
+          translationLine.textContent = '翻譯失敗：' + err.message;
+        }
+      });
+
       sentenceEls.push({ el: sEl, start: sentence.start, end: sentence.end });
     });
   }
