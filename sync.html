@@ -45,6 +45,18 @@
   .word{cursor:pointer; padding:1px 2px; border-radius:4px;}
   .word:hover{text-decoration:underline;}
   .word.active{background:var(--word-active); font-weight:700;}
+  .word.in-repeat{box-shadow: inset 0 -3px 0 var(--accent);}
+  .sentence-repeat-btn{cursor:pointer; opacity:.4; margin-right:6px; font-size:0.85em; user-select:none;}
+  .sentence-repeat-btn:hover{opacity:1;}
+  .repeat-status{
+    background:var(--accent); color:#fff; border-radius:10px; padding:8px 12px; margin-bottom:12px;
+    font-size:0.85rem; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .repeat-status.hidden{display:none;}
+  .repeat-status button{
+    background:rgba(255,255,255,.2); color:#fff; border:1px solid rgba(255,255,255,.5);
+    border-radius:8px; padding:4px 10px; font-size:0.78rem; cursor:pointer; flex:0 0 auto;
+  }
   .empty{color:var(--muted); text-align:center; padding:40px 20px;}
   .player-bar{
     position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--border);
@@ -70,6 +82,7 @@
   <div class="status" id="status"></div>
 
   <div class="playlist hidden" id="playlist"></div>
+  <div class="repeat-status hidden" id="repeatStatus"></div>
   <div class="transcript" id="transcript"><div class="empty">請先選擇音檔和同步逐字稿</div></div>
 </div>
 
@@ -85,6 +98,7 @@
   const syncInput = document.getElementById('syncInput');
   const statusEl = document.getElementById('status');
   const playlistEl = document.getElementById('playlist');
+  const repeatStatusEl = document.getElementById('repeatStatus');
   const transcriptEl = document.getElementById('transcript');
   const audio = document.getElementById('audio');
   const btnPlayPause = document.getElementById('btnPlayPause');
@@ -104,6 +118,7 @@
   let sentenceEls = []; // { el, start, end }
   let currentWordIdx = -1;
   let currentSentenceIdx = -1;
+  let repeatRange = null; // { startIdx, endIdx } into flatWords - the word/phrase/sentence being looped
 
   function detectType(filename){
     const name = filename.toLowerCase();
@@ -201,6 +216,7 @@
       transcriptEl.innerHTML = '<div class="empty">這一段沒有對應的逐字稿，只能單純播放</div>';
       flatWords = [];
       sentenceEls = [];
+      clearRepeatRange();
     }
     renderPlaylistUI();
   }
@@ -211,23 +227,95 @@
     sentenceEls = [];
     currentWordIdx = -1;
     currentSentenceIdx = -1;
+    repeatRange = null;
+    updateRepeatStatus();
     data.sentences.forEach((sentence) => {
       const sEl = document.createElement('p');
       sEl.className = 'sentence';
+
+      const repeatBtn = document.createElement('span');
+      repeatBtn.className = 'sentence-repeat-btn';
+      repeatBtn.textContent = '🔁';
+      repeatBtn.title = '重複整句';
+      sEl.appendChild(repeatBtn);
+
+      const sentStartIdx = flatWords.length;
       sentence.words.forEach((w, i) => {
+        const wordIdx = flatWords.length;
         const wEl = document.createElement('span');
         wEl.className = 'word';
         wEl.textContent = w.text + (i < sentence.words.length - 1 ? ' ' : '');
-        wEl.addEventListener('click', () => {
-          audio.currentTime = w.start;
-          audio.play();
-        });
+        wEl.addEventListener('click', () => handleWordTap(wordIdx));
         sEl.appendChild(wEl);
         flatWords.push({ el: wEl, start: w.start, end: w.end });
       });
+      const sentEndIdx = flatWords.length - 1;
+      repeatBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setRepeatRange(sentStartIdx, sentEndIdx);
+      });
+
       transcriptEl.appendChild(sEl);
       sentenceEls.push({ el: sEl, start: sentence.start, end: sentence.end });
     });
+  }
+
+  // Tapping a word: no active repeat -> repeat just this word.
+  // Tap a word outside the current repeat range -> extend range to cover it (phrase/sentence repeat).
+  // Tap a word strictly inside a multi-word range -> collapse back to just that word.
+  // Tap the sole active word again -> cancel repeat.
+  function handleWordTap(idx){
+    if (!repeatRange) {
+      setRepeatRange(idx, idx);
+    } else if (repeatRange.startIdx === idx && repeatRange.endIdx === idx) {
+      clearRepeatRange();
+    } else if (idx < repeatRange.startIdx || idx > repeatRange.endIdx) {
+      setRepeatRange(Math.min(repeatRange.startIdx, idx), Math.max(repeatRange.endIdx, idx));
+    } else {
+      setRepeatRange(idx, idx);
+    }
+  }
+
+  function setRepeatRange(startIdx, endIdx){
+    clearRepeatHighlight();
+    repeatRange = { startIdx, endIdx };
+    for (let i = startIdx; i <= endIdx; i++) flatWords[i].el.classList.add('in-repeat');
+    updateRepeatStatus();
+    audio.currentTime = flatWords[startIdx].start;
+    audio.play();
+  }
+
+  function clearRepeatRange(){
+    clearRepeatHighlight();
+    repeatRange = null;
+    updateRepeatStatus();
+  }
+
+  function clearRepeatHighlight(){
+    if (repeatRange) {
+      for (let i = repeatRange.startIdx; i <= repeatRange.endIdx; i++) {
+        if (flatWords[i]) flatWords[i].el.classList.remove('in-repeat');
+      }
+    }
+  }
+
+  function updateRepeatStatus(){
+    if (!repeatRange) {
+      repeatStatusEl.classList.add('hidden');
+      repeatStatusEl.innerHTML = '';
+      return;
+    }
+    const text = flatWords.slice(repeatRange.startIdx, repeatRange.endIdx + 1)
+      .map((fw) => fw.el.textContent).join('').trim();
+    repeatStatusEl.classList.remove('hidden');
+    const label = document.createElement('span');
+    label.textContent = `🔁 重複播放中：「${text}」`;
+    const btn = document.createElement('button');
+    btn.textContent = '停止重複';
+    btn.addEventListener('click', clearRepeatRange);
+    repeatStatusEl.innerHTML = '';
+    repeatStatusEl.appendChild(label);
+    repeatStatusEl.appendChild(btn);
   }
 
   // Binary search for the last word whose start <= t
@@ -266,6 +354,9 @@
 
   function tick(){
     if (!audio.paused) {
+      if (repeatRange && audio.currentTime >= flatWords[repeatRange.endIdx].end) {
+        audio.currentTime = flatWords[repeatRange.startIdx].start;
+      }
       updateHighlight(audio.currentTime);
       requestAnimationFrame(tick);
     }
