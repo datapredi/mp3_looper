@@ -88,11 +88,11 @@
 <body>
 <div class="wrap">
   <h1>🎧 逐字稿同步播放器</h1>
-  <div class="sub">逐字稿可以直接選「最上層資料夾」一次載入全部 30 課。mp3 因為檔案太大太多，手機一次載入整個上層資料夾會當機，請一課一課選 mp3 資料夾——但每一課只要選過一次，就會永久記住，之後開頁面直接出現在清單上，不用再選第二次。</div>
+  <div class="sub">逐字稿跟 mp3 都可以直接選「最上層資料夾」一次載入全部課程（前提是檔案已經下載在手機本機，不是 iCloud 雲端——雲端檔案一次載入太多會讓 Safari 當機）。選過的 mp3 會永久記住，之後開頁面不用再選。</div>
   <div class="note">音檔跟同步逐字稿都只在你自己的裝置上選取播放，不會上傳到任何地方。</div>
 
   <div class="pickers">
-    <label class="filebtn" for="audioInput">選擇「單一課」的 mp3 資料夾</label>
+    <label class="filebtn" for="audioInput">選擇 mp3 資料夾（本機檔案可選最上層，雲端檔案建議一課一課選）</label>
     <input type="file" id="audioInput" webkitdirectory multiple>
     <label class="filebtn" for="syncInput">選擇逐字稿最上層資料夾</label>
     <input type="file" id="syncInput" webkitdirectory multiple>
