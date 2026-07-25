@@ -26,6 +26,10 @@
   .note{font-size:0.75rem; color:var(--muted); margin:-6px 0 16px; line-height:1.5;}
   .pickers{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px;}
   input[type=file]{display:none;}
+  input[type=password]{
+    font-family:inherit; font-size:0.9rem; padding:10px 14px; border-radius:10px;
+    border:1px solid var(--border); background:var(--card); color:var(--text); flex:1; min-width:180px;
+  }
   button, label.filebtn{
     font-family:inherit; font-size:0.9rem; padding:10px 14px; border-radius:10px;
     border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer;
@@ -81,6 +85,11 @@
     <label class="filebtn" for="syncInput">選擇同步逐字稿們 (json，可多選)</label>
     <input type="file" id="syncInput" multiple>
   </div>
+  <div class="pickers">
+    <input type="password" id="apiKeyInput" placeholder="Anthropic API Key (sk-ant-...)">
+    <button id="btnSaveKey">儲存 Key</button>
+  </div>
+  <div class="note">用來點句子顯示中文翻譯。Key 只存在這台裝置的瀏覽器裡，不會上傳到任何地方。</div>
   <div class="status" id="status"></div>
 
   <div class="playlist hidden" id="playlist"></div>
@@ -122,10 +131,20 @@
   let currentSentenceIdx = -1;
   let repeatRange = null; // { startIdx, endIdx } into flatWords - the word/phrase/sentence being looped
 
-  // Shares the same localStorage (same origin, datapredi.github.io) as the
-  // indonesian-flashcard site's API key input - no separate setup needed here.
+  // Same localStorage key as the indonesian-flashcard site (same origin,
+  // datapredi.github.io) - a key saved on either page works on both.
   const API_KEY_LS = "anthropic_api_key";
   function getApiKey(){ return localStorage.getItem(API_KEY_LS) || ""; }
+  function setApiKey(k){ localStorage.setItem(API_KEY_LS, k); }
+
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  const btnSaveKey = document.getElementById('btnSaveKey');
+  apiKeyInput.value = getApiKey();
+  btnSaveKey.addEventListener('click', () => {
+    setApiKey(apiKeyInput.value.trim());
+    btnSaveKey.textContent = '已儲存 ✓';
+    setTimeout(() => { btnSaveKey.textContent = '儲存 Key'; }, 1500);
+  });
 
   const TRANSLATION_CACHE_LS = "sync_translation_cache";
   let translationCache = {};
@@ -135,7 +154,7 @@
   async function translateSentence(text){
     if (translationCache[text]) return translationCache[text];
     const key = getApiKey();
-    if (!key) throw new Error("請先到 indonesian-flashcard 頁面設定並儲存 Anthropic API Key");
+    if (!key) throw new Error("請先在上面輸入並儲存 Anthropic API Key");
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
