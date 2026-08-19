@@ -105,9 +105,9 @@
   <div class="note">音檔跟同步逐字稿都只在你自己的裝置上選取播放，不會上傳到任何地方。</div>
 
   <div class="pickers">
-    <button type="button" class="filebtn" id="btnPickAudio">選擇 mp3 資料夾（本機檔案可選最上層，雲端檔案建議一課一課選）</button>
-    <button type="button" class="filebtn" id="btnPickSync">選擇逐字稿最上層資料夾</button>
-    <input type="file" id="folderInput" webkitdirectory multiple style="display:none;">
+    <label class="filebtn" id="lblPickAudio" for="folderInput">選擇 mp3 資料夾（本機檔案可選最上層，雲端檔案建議一課一課選）</label>
+    <label class="filebtn" id="lblPickSync" for="folderInput">選擇逐字稿最上層資料夾</label>
+    <input type="file" id="folderInput" webkitdirectory multiple>
   </div>
   <div class="pickers">
     <input type="password" id="apiKeyInput" placeholder="Anthropic API Key (sk-ant-...)">
@@ -142,8 +142,8 @@
 
 <script>
   const folderInput = document.getElementById('folderInput');
-  const btnPickAudio = document.getElementById('btnPickAudio');
-  const btnPickSync = document.getElementById('btnPickSync');
+  const lblPickAudio = document.getElementById('lblPickAudio');
+  const lblPickSync = document.getElementById('lblPickSync');
   const statusEl = document.getElementById('status');
   const lessonsEl = document.getElementById('lessons');
   const playlistEl = document.getElementById('playlist');
@@ -328,20 +328,23 @@
 
   // iOS Safari has a known flakiness bug where, with two separate
   // webkitdirectory <input> elements on the same page, the second one can
-  // silently fail to open its folder picker at all. Using a single shared
-  // hidden input for both pickers (routed by which button was tapped)
-  // avoids that -- there's only ever one webkitdirectory input in the DOM.
+  // silently fail to open its folder picker at all. Both pickers now share
+  // a single input -- but critically, still open it via native <label for>
+  // association, not a JS-triggered .click() on a hidden input (that's its
+  // own separate iOS Safari reliability trap: programmatically clicking a
+  // hidden file input doesn't reliably open the picker on iOS Safari, even
+  // from a genuine user-gesture handler). The label click listeners below
+  // only record which picker was tapped; the browser's own native
+  // label-for-input behavior is what actually opens the dialog.
   let pendingPickTarget = null; // 'audio' | 'sync'
 
-  btnPickAudio.addEventListener('click', () => {
+  lblPickAudio.addEventListener('click', () => {
     pendingPickTarget = 'audio';
     folderInput.value = '';
-    folderInput.click();
   });
-  btnPickSync.addEventListener('click', () => {
+  lblPickSync.addEventListener('click', () => {
     pendingPickTarget = 'sync';
     folderInput.value = '';
-    folderInput.click();
   });
 
   folderInput.addEventListener('change', async (e) => {
