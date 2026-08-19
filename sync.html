@@ -105,10 +105,9 @@
   <div class="note">音檔跟同步逐字稿都只在你自己的裝置上選取播放，不會上傳到任何地方。</div>
 
   <div class="pickers">
-    <label class="filebtn" for="audioInput">選擇 mp3 資料夾（本機檔案可選最上層，雲端檔案建議一課一課選）</label>
-    <input type="file" id="audioInput" webkitdirectory multiple>
-    <label class="filebtn" for="syncInput">選擇逐字稿最上層資料夾</label>
-    <input type="file" id="syncInput" webkitdirectory multiple>
+    <button type="button" class="filebtn" id="btnPickAudio">選擇 mp3 資料夾（本機檔案可選最上層，雲端檔案建議一課一課選）</button>
+    <button type="button" class="filebtn" id="btnPickSync">選擇逐字稿最上層資料夾</button>
+    <input type="file" id="folderInput" webkitdirectory multiple style="display:none;">
   </div>
   <div class="pickers">
     <input type="password" id="apiKeyInput" placeholder="Anthropic API Key (sk-ant-...)">
@@ -142,8 +141,9 @@
 </div>
 
 <script>
-  const audioInput = document.getElementById('audioInput');
-  const syncInput = document.getElementById('syncInput');
+  const folderInput = document.getElementById('folderInput');
+  const btnPickAudio = document.getElementById('btnPickAudio');
+  const btnPickSync = document.getElementById('btnPickSync');
   const statusEl = document.getElementById('status');
   const lessonsEl = document.getElementById('lessons');
   const playlistEl = document.getElementById('playlist');
@@ -326,19 +326,38 @@
     return map;
   }
 
-  audioInput.addEventListener('change', async (e) => {
-    const grouped = groupByLesson(e.target.files, AUDIO_EXT_RE, 'audio/');
-    Object.assign(lessonAudioFiles, grouped);
-    rebuildLessonList();
-    for (const lesson of Object.keys(grouped)) {
-      for (const f of grouped[lesson]) {
-        try { await cacheAudioFile(lesson, f); } catch (err) { console.warn('audio cache failed', err); }
-      }
-    }
+  // iOS Safari has a known flakiness bug where, with two separate
+  // webkitdirectory <input> elements on the same page, the second one can
+  // silently fail to open its folder picker at all. Using a single shared
+  // hidden input for both pickers (routed by which button was tapped)
+  // avoids that -- there's only ever one webkitdirectory input in the DOM.
+  let pendingPickTarget = null; // 'audio' | 'sync'
+
+  btnPickAudio.addEventListener('click', () => {
+    pendingPickTarget = 'audio';
+    folderInput.value = '';
+    folderInput.click();
   });
-  syncInput.addEventListener('change', (e) => {
-    lessonSyncFiles = groupByLesson(e.target.files, JSON_EXT_RE, 'application/json');
-    rebuildLessonList();
+  btnPickSync.addEventListener('click', () => {
+    pendingPickTarget = 'sync';
+    folderInput.value = '';
+    folderInput.click();
+  });
+
+  folderInput.addEventListener('change', async (e) => {
+    if (pendingPickTarget === 'audio') {
+      const grouped = groupByLesson(e.target.files, AUDIO_EXT_RE, 'audio/');
+      Object.assign(lessonAudioFiles, grouped);
+      rebuildLessonList();
+      for (const lesson of Object.keys(grouped)) {
+        for (const f of grouped[lesson]) {
+          try { await cacheAudioFile(lesson, f); } catch (err) { console.warn('audio cache failed', err); }
+        }
+      }
+    } else if (pendingPickTarget === 'sync') {
+      lessonSyncFiles = groupByLesson(e.target.files, JSON_EXT_RE, 'application/json');
+      rebuildLessonList();
+    }
   });
 
   loadCachedAudioFiles().then((map) => {
